@@ -1,66 +1,91 @@
-# Payment Reconciliation Dashboard
+# ClearLedger
 
-A full-stack payment reconciliation system that matches internal payment records against external provider data (Stripe, PayPal, bank transfers) using a confidence-based scoring engine.
-
-Built as a portfolio project demonstrating real-world fintech patterns: async Python, React dashboards, workflow automation, and natural language querying.
-
----
-
-## Demo
+**Payment reconciliation engine and dashboard.** Matches internal payment records against provider settlement data (Stripe, PayPal, bank transfers) using confidence scoring, classifies every record that does not reconcile, and lets you query the results in plain English.
 
 ![Demo](docs/demo.gif)
-*End-to-end flow: initial seed → dashboard → reconciliations list → scoring detail → trends chart → natural language query.*
+*Seed data, dashboard, reconciliation list, scoring detail, trends chart, natural language query.*
 
 ---
 
-## Tech Stack
+## The problem
+
+Every payment exists in two places: the internal ledger and the provider's records. They rarely line up cleanly. Providers deduct fees, settlement lands days later, and provider records almost never carry a clean foreign key back to the internal payment ID. Exact-key joins miss most of these cases, so reconciliation teams end up matching by hand.
+
+ClearLedger scores each provider record against candidate internal payments on amount, payment instrument, merchant and date, converts that score into a confidence percentage, and assigns one of seven statuses. Anything that does not reconcile is surfaced instead of silently dropped.
+
+## Highlights
+
+- **Confidence scoring engine** with a dynamic maximum score, so a PayPal wallet payment and a Stripe card payment are each judged only on the fields they actually carry.
+- **Fee-aware matching** that recognizes when the provider amount equals the internal amount minus fees.
+- **Seven reconciliation statuses**, including `missing_internal` and `missing_external` for one-sided records.
+- **Async FastAPI backend** (SQLAlchemy async, asyncpg) with all money stored as integer minor units.
+- **React 19 dashboard** with KPIs, filterable grids, per-match scoring breakdowns and daily trends.
+- **Natural language queries** through a LangChain + Claude NL-to-SQL chain.
+- **n8n workflows** that simulate continuous provider feeds on cron schedules.
+- **61 automated tests** across the API and the frontend.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    N8N["n8n workflows<br/>(simulated provider feeds)"] -->|HTTP| API
+    WEB["React dashboard<br/>(TanStack Query)"] -->|REST| API
+    API["FastAPI<br/>(async SQLAlchemy)"] --> ENGINE["Reconciliation engine<br/>(scoring + confidence)"]
+    API --> ASK["Ask AI<br/>(LangChain + Claude)"]
+    API --> PG[("PostgreSQL 16")]
+    ENGINE --> PG
+    ASK --> PG
+```
+
+## Tech stack
 
 | Layer | Technology |
 |-------|-----------|
-| **Backend** | Python 3.12, FastAPI, SQLAlchemy (async), Pydantic v2 |
-| **Database** | PostgreSQL 16, asyncpg driver |
-| **Data processing** | Pandas (trend aggregation) |
-| **NL queries** | LangChain, Anthropic Claude (claude-sonnet-4) |
-| **Frontend** | React 19, TypeScript 5, Vite 8 |
-| **UI** | shadcn/ui, Tailwind CSS v4 |
-| **Data fetching** | TanStack Query v5 |
-| **Data grids** | TanStack Table v8 |
-| **Charts** | Recharts |
-| **Workflow automation** | n8n |
-| **Infrastructure** | Docker Compose |
-| **API testing** | pytest, pytest-asyncio, httpx |
-| **Frontend testing** | Vitest, Testing Library |
-| **Linting (Python)** | ruff |
-| **Linting (TS)** | ESLint |
+| Backend | Python 3.12, FastAPI, SQLAlchemy (async), Pydantic v2, asyncpg |
+| Database | PostgreSQL 16 |
+| Data processing | Pandas (trend aggregation) |
+| NL queries | LangChain, Anthropic Claude (claude-sonnet-4) |
+| Frontend | React 19, TypeScript 5, Vite 8, shadcn/ui, Tailwind CSS v4 |
+| Data layer (web) | TanStack Query v5, TanStack Table v8, Recharts |
+| Workflow automation | n8n |
+| Infrastructure | Docker Compose |
+| Testing and linting | pytest, pytest-asyncio, httpx, Vitest, Testing Library, ruff, ESLint |
 
 ---
 
-## How to Run
+## Quick start
+
+Requirements: Docker, and an Anthropic API key if you want the Ask AI feature.
 
 ```bash
-git clone https://github.com/peelmicro/payment-reconciliation-dashboard.git
-cd payment-reconciliation-dashboard
-```
-
-### Option 1 — Docker Compose (full stack)
-
-```bash
-cp apps/api/.env.example apps/api/.env   # Add your ANTHROPIC_API_KEY (required for Ask AI feature)
+git clone https://github.com/tusharpanthri/clear-ledger.git
+cd clear-ledger
+cp apps/api/.env.example apps/api/.env   # set ANTHROPIC_API_KEY for Ask AI
 docker compose up -d
+npm run initial-seed
 ```
 
-This starts:
-- PostgreSQL on port **5432**
-- n8n on port **5678** (http://localhost:5678)
-- API on port **8000** (http://localhost:8000)
-- Web on port **3000** (http://localhost:3000)
+Then open **http://localhost:3000**.
 
-### Option 2 — Local development
+| Service | URL |
+|---------|-----|
+| Web dashboard | http://localhost:3000 |
+| API and Swagger UI | http://localhost:8000/docs |
+| n8n | http://localhost:5678 |
+| PostgreSQL | localhost:5432 |
 
-**Prerequisites:** Python 3.12+, Node.js 20+, PostgreSQL 16 running locally.
+`npm run initial-seed` runs `scripts/initial-seed.sh`, which checks API health, seeds 3 currencies (USD, EUR, GBP), 3 providers (Stripe, PayPal, Bankinter) and 3 merchants, generates 15 internal payments, simulates the matching Stripe, PayPal and bank records, adds 2 orphan records per provider, and runs the reconciliation engine. It requires `curl`.
+
+![Initial seed](docs/initial-seed.png)
+*Output of `npm run initial-seed`: 8 sequential API calls with progress.*
+
+<details>
+<summary><b>Local development (API and web outside Docker)</b></summary>
+
+Prerequisites: Python 3.12+, Node.js 20+.
 
 ```bash
-# 1. Start PostgreSQL and n8n (Docker)
+# 1. Start PostgreSQL and n8n
 docker compose up -d postgres n8n
 
 # 2. Backend
@@ -68,7 +93,7 @@ cd apps/api
 python -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env             # Edit DATABASE_URL and add ANTHROPIC_API_KEY
+cp .env.example .env             # set DATABASE_URL and ANTHROPIC_API_KEY
 fastapi dev app/main.py          # http://localhost:8000
 
 # 3. Frontend (new terminal)
@@ -77,207 +102,130 @@ npm install
 npm run dev                      # http://localhost:5173
 ```
 
-### Populate data
+In this mode the dashboard is served by Vite at **http://localhost:5173**, not port 3000. Seed data the same way with `npm run initial-seed` from the repo root.
 
-After starting the stack, the database is empty. First verify the API is running:
+</details>
 
-```bash
-curl http://localhost:8000/health
-# Expected: {"status":"ok"}
-```
+<details>
+<summary><b>Other ways to seed data (curl, Swagger UI, n8n)</b></summary>
 
-Then populate data using one of these 4 options:
-
-#### Option A — One-command script (recommended)
-
-Requires `curl` installed (standard on macOS/Linux).
+**Manual curl**
 
 ```bash
-npm run initial-seed
-```
-
-This runs `scripts/initial-seed.sh` which sequentially: checks API health, seeds 3 currencies (USD, EUR, GBP), 3 providers (Stripe, PayPal, Bankinter), 3 merchants (2 Spain, 1 UK), generates 15 fake payments, simulates Stripe/PayPal/bank records, generates 2 orphan records per provider (to demonstrate the `missing_internal` status — see [Reconciliation statuses](#reconciliation-statuses)), and runs the reconciliation engine.
-
-![Initial seed](docs/initial-seed.png)
-*Terminal output of `npm run initial-seed` — 8 sequential API calls with progress.*
-
-#### Option B — Manual curl commands
-
-```bash
-# 1. Seed reference data
+# Reference data
 curl -X POST http://localhost:8000/seed/currencies
 curl -X POST http://localhost:8000/seed/providers
 curl -X POST http://localhost:8000/seed/merchants
 
-# 2. Generate internal payments (count=1..50, default 5)
+# Internal payments (count 1 to 50, default 5)
 curl -X POST "http://localhost:8000/payments/generate?count=15"
 
-# 3. Simulate provider records
+# Provider records
 curl -X POST http://localhost:8000/stripe-payments/simulate
 curl -X POST http://localhost:8000/paypal-payments/simulate
 curl -X POST http://localhost:8000/bank-payments/simulate
 
-# 4. (Optional) Generate orphan provider records to demonstrate missing_internal
+# Optional: orphan provider records (produce missing_internal)
 curl -X POST "http://localhost:8000/stripe-payments/simulate-orphan?count=2"
 curl -X POST "http://localhost:8000/paypal-payments/simulate-orphan?count=2"
 curl -X POST "http://localhost:8000/bank-payments/simulate-orphan?count=2"
 
-# 5. Run reconciliation
+# Reconcile
 curl -X POST http://localhost:8000/reconciliations/run
 ```
 
-#### Option C — Swagger UI
-
-1. Open http://localhost:8000/docs
-2. Execute each POST endpoint in order:
-   - `POST /seed/currencies` → `POST /seed/providers` → `POST /seed/merchants`
-   - `POST /payments/generate` (set `count` to 15)
-   - `POST /stripe-payments/simulate` → `POST /paypal-payments/simulate` → `POST /bank-payments/simulate`
-   - `POST /reconciliations/run`
+**Swagger UI:** open http://localhost:8000/docs and execute the same POST endpoints in the order above.
 
 ![Swagger UI](docs/swagger.png)
-*Swagger UI at `http://localhost:8000/docs` — all endpoints grouped by tag (seed, payments, stripe, paypal, bank, reconciliation, ask).*
 
-#### Option D — n8n workflows
+**n8n:** import the workflows (see [n8n workflows](#n8n-workflows)) and run WF1, WF2 (a few times), WF3, WF4, WF5, optionally WF7, then WF6.
 
-1. Open n8n at http://localhost:5678
-2. Import all 7 JSON files from `n8n/workflows/` (see [How to import workflows](#how-to-import-workflows) below)
-3. Execute manually in order: **WF1** (seed) → **WF2** (payments, run a few times) → **WF3** (Stripe) → **WF4** (PayPal) → **WF5** (bank) → **WF7** (optional — orphan records for `missing_internal`) → **WF6** (reconciliation)
-4. **Publish** WF2–WF6 to activate their cron schedules for continuous data generation (WF7 stays manual — orphans are incidents, not a periodic flow)
-
-After populating, open http://localhost:3000 to see the dashboard with data.
-
-![Dashboard home](docs/home.png)
-*Dashboard home — match rate, total reconciled, status breakdown by type, provider distribution, and daily trends.*
-
-### Convenience scripts (from repo root)
-
-| Command | What it does |
-|---------|-------------|
-| `npm run initial-seed` | Seed data, generate payments, simulate providers, and run reconciliation |
-| `npm run api` | Start FastAPI dev server |
-| `npm run web` | Start Vite dev server |
-| `npm run api:test` | Run pytest |
-| `npm run web:test` | Run Vitest |
-| `npm run api:lint` | Run ruff linter |
-| `npm run api:lint:fix` | Run ruff with auto-fix |
-| `npm run web:lint` | Run ESLint |
-| `npm run dc:up` | `docker compose up -d` |
-| `npm run dc:down` | `docker compose down` |
-| `npm run dc:ps` | Show running containers |
-| `npm run dc:clean` | Stop and remove volumes |
-| `npm run dc:logs` | Follow all container logs |
+</details>
 
 ---
 
-## Reconciliation Algorithm
+## How matching works
 
-The engine scores each provider payment (candidate) against all unreconciled internal payments and selects the best match above a **65% confidence threshold**.
+For each provider record, the engine scores every unreconciled internal payment and keeps the highest-scoring candidate if its confidence is at least **65%**.
 
-### Scoring criteria
+### Scoring
 
-| Criteria | Points | When scored |
-|----------|--------|-------------|
-| Amount — exact match | +100 | Always |
-| Amount — after fee (net ≈ external) | +80 | Always |
-| Amount — within 5% tolerance | +50 | Always |
-| Card BIN + last4 | +50 | Both records have card data |
-| IBAN country + last4 | +50 | Both records have IBAN data |
-| VAT number | +50 | Both records have VAT |
-| Date — same day | +30 | Always |
-| Date — within 1 day | +20 | Always |
-| Date — within 7 days | +10 | Always |
+Amount and date are tiered: only the highest tier that applies is counted.
 
-**Confidence** = `(score / max_possible_score) × 100`
+| Signal | Points | Counted toward the maximum when |
+|--------|--------|---------------------------------|
+| Amount: exact | 100 | Always |
+| Amount: equals internal amount minus fee | 80 | Always |
+| Amount: within 5% | 50 | Always |
+| Card BIN + last 4 | 50 | Both records have card data |
+| IBAN country + last 4 | 50 | Both records have IBAN data |
+| Merchant VAT number | 50 | Both records have a VAT number |
+| Date: same day | 30 | Always |
+| Date: within 1 day | 20 | Always |
+| Date: within 7 days | 10 | Always |
 
-The `max_possible_score` is calculated **dynamically** — a criterion is only added to the maximum if both the internal payment and the provider record have data for that field. This ensures fair comparison across provider types:
+```
+confidence = score / max_possible_score × 100
+```
 
-- A PayPal wallet payment (no card/IBAN) has max 180 pts (100 + 50 VAT + 30 date). Score 180/180 = **100%**.
-- A Stripe card payment has max 230 pts (100 + 50 card + 50 VAT + 30 date). Score 230/230 = **100%**.
+`max_possible_score` only includes signals that both records can provide. A PayPal wallet payment has no card or IBAN data, so its maximum is 180 (amount 100 + VAT 50 + date 30). A Stripe card payment adds card data, for a maximum of 230. Both reach 100% on a perfect match, so confidence is comparable across providers.
 
-Both are equally strong matches despite having different field sets.
+**Worked example.** A €50.00 PayPal payment settles the next day as €48.25 after PayPal's fee. Fee-adjusted amount (80) + VAT (50) + within 1 day (20) = 150 / 180 = **83%**. That clears the threshold, and the status is `matched_with_fee`.
 
 ![Scoring example](docs/scoring-example.png)
-*Reconciliation detail — shows `Score: X / max_score` and computed `Confidence %` alongside the matching provider and internal records.*
+*Reconciliation detail: score, maximum score and confidence alongside the matched provider and internal records.*
 
-### Reconciliation statuses
+### Statuses
 
 | Status | Meaning |
 |--------|---------|
-| `matched` | Exact amount match above threshold |
-| `matched_with_fee` | Net amount (after fee) matches external |
-| `amount_mismatch` | Fields match but amount differs |
-| `missing_internal` | Provider has a record; we don't |
-| `missing_external` | We have a record; provider doesn't (yet) |
-| `duplicate` | Multiple internal records above threshold |
+| `matched` | Above threshold, exact amount |
+| `matched_with_fee` | Above threshold, provider amount equals internal amount minus fee |
+| `amount_mismatch` | Above threshold, but the amounts differ (within the 5% tier) |
+| `missing_internal` | Provider record with no internal payment above threshold |
+| `missing_external` | Internal payment with no provider record yet |
+| `duplicate` | More than one internal payment above threshold |
 | `disputed` | Manually flagged for review |
 
-> **Demo tip — how to generate `missing_internal` and `missing_external`:**
->
-> - **`missing_internal`** requires a provider record with no matching internal payment. Use the orphan simulation endpoints: `POST /stripe-payments/simulate-orphan?count=N`, `POST /paypal-payments/simulate-orphan?count=N`, `POST /bank-payments/simulate-orphan?count=N`. The `npm run initial-seed` script generates 2 orphans per provider automatically.
-> - **`missing_external`** requires an internal payment with no matching provider record. Run `POST /payments/generate` then `POST /reconciliations/run` **without** calling the simulate endpoints first.
-
-### Dashboard pages
-
-The frontend exposes four views, all populated from the same API endpoints:
-
-![Transactions](docs/transactions.png)
-*Transactions page — internal payments with filters for status, provider, and method.*
-
-![Reconciliations list](docs/reconciliations-list.png)
-*Reconciliations list — paginated grid with status filter, confidence column, and click-through to detail.*
-
-![Reconciliation detail](docs/reconciliation-detail.png)
-*Reconciliation detail — internal vs external record, delta, and scoring breakdown.*
-
-![Missing external](docs/missing-external.png)
-*Missing external — internal payments that have no matching provider record yet.*
-
-![Trends](docs/trends.png)
-*Daily reconciliation trends — stacked bar chart across N days (Recharts), aggregated by Pandas on the API side.*
+To reproduce the one-sided statuses: `missing_internal` comes from the `simulate-orphan` endpoints (the seed script creates 2 per provider). `missing_external` appears if you generate payments and run reconciliation without calling the `simulate` endpoints first.
 
 ---
 
-## n8n Workflows
+## Dashboard
 
-All workflows are exported as JSON files in `n8n/workflows/` and can be imported into any n8n instance.
+| | |
+|---|---|
+| ![Dashboard home](docs/home.png) **Home:** match rate, total reconciled, status breakdown, provider distribution, daily trends | ![Transactions](docs/transactions.png) **Transactions:** internal payments filtered by status, provider and method |
+| ![Reconciliations list](docs/reconciliations-list.png) **Reconciliations:** paginated grid with status filter and confidence column | ![Reconciliation detail](docs/reconciliation-detail.png) **Detail:** internal vs external record, delta and scoring breakdown |
+| ![Missing external](docs/missing-external.png) **Missing external:** internal payments with no provider record | ![Trends](docs/trends.png) **Trends:** daily stacked bar chart, aggregated with Pandas on the API side |
 
-| Workflow | File | Trigger | What it does |
-|----------|------|---------|-------------|
-| WF1 | `WF1_seed_base_data.json` | Manual | Seeds 3 currencies (USD, EUR, GBP), 3 providers (Stripe, PayPal, Bankinter), and 3 merchants (2 Spain, 1 UK) |
-| WF2 | `WF2_generate_fake_payments.json` | Every 5 min | Generates 5 fake internal payments |
-| WF3 | `WF3_simulate_stripe.json` | Every 10 min | Simulates Stripe records from recent card payments |
-| WF4 | `WF4_simulate_paypal.json` | Every 30 min | Simulates PayPal records from recent card/wallet payments |
-| WF5 | `WF5_simulate_bank.json` | Every 1 hour | Simulates bank transfer records from recent bank payments |
-| WF6 | `WF6_run_reconciliation.json` | Every 15 min | Runs the reconciliation engine |
-| WF7 | `WF7_simulate_orphans.json` | Manual | Generates 2 orphan records per provider (Stripe, PayPal, bank) — demonstrates `missing_internal` status |
+---
+
+## n8n workflows
+
+Workflows live in `n8n/workflows/` as JSON exports.
+
+| Workflow | Trigger | What it does |
+|----------|---------|-------------|
+| WF1 `seed_base_data` | Manual | Seeds currencies, providers and merchants |
+| WF2 `generate_fake_payments` | Every 5 min | Generates 5 internal payments |
+| WF3 `simulate_stripe` | Every 10 min | Simulates Stripe records from recent card payments |
+| WF4 `simulate_paypal` | Every 30 min | Simulates PayPal records from recent card and wallet payments |
+| WF5 `simulate_bank` | Every hour | Simulates bank transfer records from recent bank payments |
+| WF6 `run_reconciliation` | Every 15 min | Runs the reconciliation engine |
+| WF7 `simulate_orphans` | Manual | Creates 2 orphan records per provider to demonstrate `missing_internal` |
+
+**Import:** open http://localhost:5678, create a new workflow, choose **Import from file** from the top-right menu, and select a JSON file. Publish WF2 to WF6 to activate their schedules. WF1 and WF7 stay manual. Workflows call the API at `http://host.docker.internal:8000`, so the API must be running.
 
 ![n8n workflows](docs/n8n-workflows.png)
-*n8n workflow list — 7 imported workflows; cron-scheduled ones are toggled Active, WF1 and WF7 stay manual.*
-
-![n8n execution](docs/n8n-execution.png)
-*Successful execution of WF6 (reconciliation) — each HTTP node shows its response payload for inspection.*
-
-### How to import workflows
-
-1. Start the stack: `docker compose up -d` (or `npm run dc:up`)
-2. Open n8n at http://localhost:5678
-3. Click **"+"** → **"Workflow"** to create a new workflow
-4. Click the **three dots menu (...)** at the top right → **"Import from file"**
-5. Select a JSON file from `n8n/workflows/`
-6. Click **"Execute workflow"** to test manually
-7. Toggle **"Publish"** to activate the cron schedule
-
-> **Note:** The API server must be running for workflows to work. Workflows call `http://host.docker.internal:8000` to reach the API from inside Docker.
 
 ---
 
-## Ask AI (Natural Language Queries)
+## Ask AI
 
-The `/ask` endpoint accepts plain-text questions in English or Spanish and returns answers from the database.
+`POST /ask` accepts a plain-text question in English or Spanish and answers from the database using a two-step LangChain chain: Claude generates SQL from the schema, the API executes it, and Claude turns the result rows into a natural language answer.
 
 ```bash
-# Example
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
   -d '{"question": "What is the match rate for this week?"}'
@@ -285,199 +233,121 @@ curl -X POST http://localhost:8000/ask \
 
 Requires `ANTHROPIC_API_KEY` in `apps/api/.env`.
 
-The endpoint uses a two-step LangChain chain:
-1. Generate SQL from the question (Claude reads the schema)
-2. Execute the SQL, then generate a natural language answer from the results
-
 ![Ask AI](docs/ask-ai.png)
-*Ask AI page — natural language question → generated SQL → natural language answer.*
 
 ---
 
-## API Endpoints
+## API reference
+
+Full interactive docs at http://localhost:8000/docs. `.http` files for VS Code REST Client are in `apps/api/http/`.
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Health check |
-| POST | `/seed/currencies` | Seed currencies (USD, EUR, GBP) |
-| POST | `/seed/providers` | Seed providers (Stripe, PayPal, Bankinter) |
-| POST | `/seed/merchants` | Seed merchants (2 Spain, 1 UK) |
-| POST | `/payments/generate` | Generate fake internal payments (`count` 1–50, default 5) |
-| POST | `/stripe-payments/simulate` | Simulate Stripe records from recent card payments |
-| POST | `/stripe-payments/simulate-orphan` | Generate orphan Stripe records (no internal payment) — produces `missing_internal` |
-| POST | `/paypal-payments/simulate` | Simulate PayPal records from recent card/wallet payments |
-| POST | `/paypal-payments/simulate-orphan` | Generate orphan PayPal records (no internal payment) — produces `missing_internal` |
-| POST | `/bank-payments/simulate` | Simulate bank transfer records from recent bank payments |
-| POST | `/bank-payments/simulate-orphan` | Generate orphan bank records (no internal payment) — produces `missing_internal` |
-| GET | `/reconciliations` | List reconciliations (paginated, filterable by status) |
+| POST | `/seed/currencies`, `/seed/providers`, `/seed/merchants` | Seed reference data |
+| POST | `/payments/generate?count=N` | Generate internal payments (1 to 50, default 5) |
+| POST | `/{stripe,paypal,bank}-payments/simulate` | Simulate provider records from recent internal payments |
+| POST | `/{stripe,paypal,bank}-payments/simulate-orphan?count=N` | Create provider records with no internal payment |
+| POST | `/reconciliations/run` | Run the reconciliation engine |
+| GET | `/reconciliations` | List reconciliations (paginated, filter by status) |
+| GET | `/reconciliations/{id}` | Reconciliation detail |
 | GET | `/reconciliations/summary` | Dashboard KPIs: match rate, totals, confidence stats |
-| GET | `/reconciliations/trends` | Daily trends over N days (Pandas aggregation) |
+| GET | `/reconciliations/trends?days=N` | Daily trends |
 | GET | `/reconciliations/missing-external` | Internal payments with no provider match |
-| GET | `/reconciliations/{id}` | Single reconciliation detail |
-| POST | `/reconciliations/run` | Trigger reconciliation engine manually |
 | POST | `/ask` | Natural language query |
-| GET | `/docs` | Swagger UI |
-
-`.http` files for VS Code REST Client are in `apps/api/http/`.
 
 ---
 
 ## Testing
 
-### Run all tests
-
 ```bash
 npm run api:test    # pytest
-npm run web:test    # vitest
+npm run web:test    # Vitest
 ```
 
-### Test breakdown
+| Suite | Tests | Covers |
+|-------|-------|--------|
+| `tests/test_engine.py` | 21 | Amount, currency, card, IBAN, VAT and date scoring; confidence calculation |
+| `tests/test_endpoints.py` | 15 | Health, list, summary and detail endpoints |
+| `tests/test_service.py` | 11 | Status mapping, provider and currency lookup, reconciliation flow |
+| `src/lib/format.test.ts` | 5 | Currency formatting |
+| `src/lib/status-colors.test.ts` | 6 | Status badge colors |
+| `src/components/layout.test.tsx` | 3 | Navigation layout |
 
-| File | Tests | What it covers |
-|------|-------|---------------|
-| `tests/test_engine.py` | 21 | Scoring engine: amount, currency, card, IBAN, VAT, date proximity, confidence |
-| `tests/test_endpoints.py` | 15 | FastAPI endpoints: health, list, summary, detail (mocked session) |
-| `tests/test_service.py` | 11 | Service helpers: status mapping, provider ID, currency lookup, reconciliation flow |
-| `src/lib/format.test.ts` | 5 | Currency formatting utilities |
-| `src/lib/status-colors.test.ts` | 6 | Status badge color mapping |
-| `src/components/layout.test.tsx` | 3 | Navigation layout render and links |
+API tests run in-process with `httpx.AsyncClient` over `ASGITransport` and override the database session with `AsyncMock`, so no database is needed. Frontend tests use Vitest with jsdom and Testing Library, wrapped in `MemoryRouter` where routing is involved.
 
-**Total: 61 tests**
+<details>
+<summary><b>All convenience scripts</b></summary>
 
-### Testing approach
+| Command | What it does |
+|---------|-------------|
+| `npm run initial-seed` | Seed, generate, simulate and reconcile |
+| `npm run api` / `npm run web` | Start the FastAPI or Vite dev server |
+| `npm run api:test` / `npm run web:test` | Run pytest or Vitest |
+| `npm run api:lint` / `npm run api:lint:fix` | Run ruff (optionally with auto-fix) |
+| `npm run web:lint` | Run ESLint |
+| `npm run dc:up` / `npm run dc:down` | Start or stop the stack |
+| `npm run dc:ps` / `npm run dc:logs` | Show containers or follow logs |
+| `npm run dc:clean` | Stop the stack and remove volumes |
 
-- **API**: `pytest-asyncio` with `asyncio_mode = auto`, `httpx.AsyncClient` with `ASGITransport` for in-process endpoint testing, `AsyncMock` dependency overrides to avoid real database connections.
-- **Frontend**: Vitest with `jsdom` environment, `@testing-library/react` for component rendering, `MemoryRouter` wrapping for route-dependent components.
+</details>
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
-payment-reconciliation-dashboard/
+clear-ledger/
 ├── apps/
-│   ├── api/                        # FastAPI backend
+│   ├── api/                      # FastAPI backend
 │   │   ├── app/
-│   │   │   ├── bank/               # Bank transfer payment model + router
-│   │   │   ├── common/             # Code generator, enums
-│   │   │   ├── currency/           # Currency reference data
-│   │   │   ├── merchant/           # Merchant model + router
-│   │   │   ├── payment/            # Internal payments (source of truth)
-│   │   │   ├── paypal/             # PayPal payment model + router
-│   │   │   ├── provider/           # Provider reference data
-│   │   │   ├── reconciliation/     # Engine, service, router
-│   │   │   │   ├── engine.py       # Scoring + confidence algorithm
-│   │   │   │   ├── service.py      # Orchestration + DB persistence
-│   │   │   │   └── router.py       # REST endpoints
-│   │   │   ├── ask/                # LangChain NL query endpoint
-│   │   │   ├── seed/               # Seed data service
-│   │   │   ├── stripe/             # Stripe payment model + router
-│   │   │   ├── config.py           # Settings (pydantic-settings)
-│   │   │   ├── database.py         # Async engine + session
-│   │   │   └── main.py             # FastAPI app + router mounting
-│   │   ├── http/                   # VS Code REST Client .http files
-│   │   ├── tests/                  # pytest test suite
-│   │   ├── Dockerfile
-│   │   ├── pytest.ini
-│   │   ├── requirements.txt
-│   │   └── ruff.toml
-│   └── web/                        # React frontend
-│       ├── src/
-│       │   ├── api/                # TanStack Query hooks
-│       │   ├── components/         # shadcn/ui + custom components
-│       │   ├── lib/                # Utilities (format, status-colors)
-│       │   ├── pages/              # Route-level page components
-│       │   ├── test/               # Vitest setup
-│       │   └── types/              # TypeScript API types
-│       ├── Dockerfile
-│       ├── nginx.conf
-│       └── vite.config.ts
-├── n8n/
-│   └── workflows/                  # Exported n8n workflow JSON files
-├── docker-compose.yml
-├── package.json                    # Root convenience scripts
-└── README.md
+│   │   │   ├── reconciliation/
+│   │   │   │   ├── engine.py     # Scoring and confidence
+│   │   │   │   ├── service.py    # Orchestration and persistence
+│   │   │   │   └── router.py     # REST endpoints
+│   │   │   ├── payment/          # Internal payments (source of truth)
+│   │   │   ├── stripe/ paypal/ bank/   # Provider models and routers
+│   │   │   ├── merchant/ currency/ provider/   # Reference data
+│   │   │   ├── ask/              # LangChain NL query endpoint
+│   │   │   ├── seed/  common/
+│   │   │   ├── config.py  database.py  main.py
+│   │   ├── http/                 # REST Client request files
+│   │   └── tests/
+│   └── web/                      # React frontend
+│       └── src/ (api/, components/, lib/, pages/, types/)
+├── n8n/workflows/                # Exported workflow JSON
+├── scripts/initial-seed.sh
+└── docker-compose.yml
 ```
 
 ---
 
-## Assumptions
+## Design decisions and trade-offs
 
-1. **Amounts in cents** — all monetary values are stored as integers in minor currency units (e.g., 4999 = €49.99). Never floats.
-2. **Separate provider tables** — `stripe_payments`, `paypal_payments`, and `bank_transfer_payments` each have provider-specific fields, rather than a polymorphic single table.
-3. **Scoring over exact key matching** — real-world provider data rarely has a clean foreign key back to internal records. Confidence scoring handles partial information gracefully.
-4. **VAT number as linking field** — in European payments, the merchant VAT number is a reliable cross-system identifier available in both internal and external records.
-5. **65% confidence threshold** — chosen to be permissive enough to handle real-world data skew while strict enough to avoid false positives.
-6. **n8n for data simulation** — provider workflows (Stripe, PayPal, bank) simulate what real webhooks would provide, demonstrating the full reconciliation lifecycle without live provider credentials.
-7. **Single-currency dashboard** — the summary KPIs aggregate all currencies together. Multi-currency breakdown is a natural extension (see below).
-8. **Human-readable codes** — format `PREFIX-YYYY-MM-SEQUENCE` (e.g., `PAY-2026-03-000012`) using a `code_sequences` table with a per-prefix counter to guarantee uniqueness without gaps.
-
----
-
-## Decisions Postponed
-
-These were considered but intentionally deferred to keep scope appropriate for the assessment:
-
-| Decision | Why deferred |
-|----------|-------------|
-| Mixed-currency dashboard totals | Requires exchange rate data; adds significant complexity for limited demo value |
-| Real provider webhooks (Stripe, PayPal) | Needs live credentials and a public endpoint; n8n simulation is equivalent for the demo |
-| Alembic database migrations | Alembic is a Python migration tool for SQLAlchemy that tracks schema changes incrementally (like versioned SQL scripts). `create_all` is acceptable for a seed-based demo; Alembic would be required in production to safely evolve the schema without losing data |
-| Per-merchant reconciliation rules | Different merchants may need different scoring thresholds; not required for the demo dataset |
-| n8n workflow pagination | Provider simulation workflows fetch all records; real workflows would need cursor-based pagination |
-| Real BIN database lookup | Card BIN matching uses stored values; a production system would validate against a live BIN database |
+| Decision | Why | Cost |
+|----------|-----|------|
+| Money as integer minor units | No floating point rounding on currency | Every boundary has to convert for display |
+| Scoring instead of exact key matching | Provider data rarely has a clean key back to internal records | Thresholds need tuning per business |
+| Dynamic maximum score | Fair confidence across providers with different field sets | Harder to explain than a fixed scale |
+| 65% threshold | Tolerates fees and settlement delay without accepting weak matches | Single global value, not per merchant |
+| Greedy best match per provider record | Simple and fast | Order-dependent: an earlier record can claim an internal payment that a later record matched better. A global assignment would avoid this at higher cost |
+| Separate table per provider | Clean schema and type safety for provider-specific fields | A new provider means a new table |
+| n8n for provider simulation | Visual, observable stand-in for real webhooks | One more service to run |
+| Pandas for trends | Concise aggregation code | Loads all rows into memory |
+| Two-step LangChain chain | Reliable SQL generation, then a readable answer | Two LLM calls per question |
+| Human-readable codes (`PAY-2026-03-000012`) | Easy to reference in support and logs | Per-prefix counter table serializes code generation |
 
 ---
 
-## What I Would Do Differently
+## Known limitations and roadmap
 
-1. **Alembic for migrations** — Alembic generates incremental migration scripts (e.g., "add column X to table Y") that can be applied and rolled back safely. Currently, `create_all` on startup drops and recreates everything, which is fine for a demo but would destroy production data on schema changes.
-2. **Event-driven reconciliation** — instead of polling every 15 minutes (WF6), trigger reconciliation when a new provider record arrives via webhook.
-3. **Idempotent provider ingestion** — the simulation workflows insert new records on every run; a real system would use provider transaction IDs as unique constraints to prevent duplicates.
-4. **Per-merchant scoring rules** — some merchants have higher fee variance or longer settlement windows; the scoring thresholds should be configurable per merchant.
-5. **Async LangChain** — the `/ask` endpoint uses a synchronous LangChain chain in an async FastAPI endpoint; this blocks the event loop. A production implementation would use `langchain_anthropic.astream` or run in a thread pool.
-6. **Structured logging** — replace `print` statements with structured JSON logs (using `structlog`) for easier aggregation in a log management system.
-7. **Caching for reference data** — currencies, merchants, and providers are loaded from the database on every request; an in-memory cache with a short TTL would reduce database load significantly.
-
----
-
-## How to Extend for Production
-
-| Concern | Approach |
-|---------|---------|
-| **Container orchestration** | Deploy the `api` and `web` Docker images to any container platform — Kubernetes, AWS ECS, Google Cloud Run, or Azure Container Apps |
-| **Database** | Replace the Docker PostgreSQL with a managed service (RDS, Cloud SQL, Azure Database for PostgreSQL) with automated backups and read replicas |
-| **Migrations** | Add Alembic for schema version control — each schema change becomes a versioned migration script that can be applied (`alembic upgrade head`) or rolled back (`alembic downgrade`). Run as an init container before the API starts |
-| **Secrets** | Store `DATABASE_URL`, `ANTHROPIC_API_KEY`, and other secrets in a secrets manager (AWS Secrets Manager, GCP Secret Manager, Azure Key Vault, HashiCorp Vault) |
-| **Observability** | Add structured logging, metrics (Prometheus/OpenTelemetry), and distributed tracing |
-| **CI/CD** | Build and push Docker images on merge to main; deploy with a rolling update strategy |
-| **Real provider webhooks** | Replace n8n simulation workflows with real Stripe/PayPal webhook endpoints that ingest provider data in real time |
-| **Multi-tenancy** | Add `tenant_id` to all tables and row-level security policies in PostgreSQL for SaaS deployment |
-
----
-
-## Trade-offs
-
-| Decision | Trade-off |
-|----------|----------|
-| Scoring-based matching | More flexible than exact key matching, but requires tuning thresholds per business context |
-| Separate provider tables | Cleaner schema and type safety, but adding a new provider requires a new table + migration |
-| n8n for workflows | No-code visual orchestration is easy to monitor, but adds an extra service and couples the demo to n8n's data model |
-| Dynamic max_score | Fair confidence % across provider types, but harder to explain to non-technical stakeholders than a fixed scale |
-| Pandas for trends | Clean aggregation code, but pulls all reconciliation rows into memory — would need chunking for large datasets |
-| LangChain two-step chain | Reliable SQL generation + NL answer, but makes 2 LLM calls per question; a single call with tool use would be more efficient |
-
----
-
-## AI Tools Used
-
-This project was developed with **Claude Code** (Anthropic's CLI tool). Per the assessment instructions, all AI assistance is documented here:
-
-- **Architecture decisions** — discussed scoring engine design, provider table separation, and n8n workflow structure with Claude Code.
-- **Code generation** — FastAPI routers, SQLAlchemy models, React components, TanStack Query hooks, and Dockerfile configurations were written with Claude Code assistance.
-- **Test suite** — pytest fixtures, mock session strategies, and Vitest component tests were developed iteratively with Claude Code.
-- **Debugging** — resolved issues including nested `.git` repository (Vite init), Docker `npm ci` lock file mismatch, and ruff `# noqa` inside triple-quoted strings.
-- **Documentation** — this README and the n8n workflow export instructions were written with Claude Code.
-- **CLAUDE.md** — the repository includes a `CLAUDE.md` file at the root, which provides project conventions, structure, and coding guidelines that Claude Code uses as context when assisting with development.
-
-All generated code was reviewed, understood, and validated before being committed.
+- **VAT number identifies the merchant, not the transaction.** It narrows candidates but adds the same 50 points to every payment from that merchant, so two same-amount, same-day payments to one merchant are hard to tell apart. Next step: use VAT as a filter rather than a scored signal.
+- **Summary KPIs add amounts across currencies.** Totals should be broken down per currency; a combined total would need exchange rate data.
+- **NL-to-SQL hardening.** Generated SQL should run under a read-only database role with SELECT-only validation, a statement timeout and a row limit.
+- **No migrations.** The schema is created with SQLAlchemy `create_all` at startup. Alembic is needed before the schema can evolve safely.
+- **Pairwise scoring.** Every provider record is scored against every unreconciled internal payment. Blocking candidates by currency and date window is the first step for larger volumes.
+- **Non-idempotent ingestion.** Simulated provider records are inserted on every run. Real ingestion should enforce provider transaction IDs as unique keys.
+- **Polling.** Reconciliation runs every 15 minutes; it should run when a provider record arrives.
+- **Synchronous LLM call in an async endpoint.** `/ask` blocks the event loop; it should use the async chain API.
+- **Logging** uses `print`; structured JSON logs are next.
+- **Production path:** container platform for `api` and `web`, managed PostgreSQL, a secrets manager for `DATABASE_URL` and `ANTHROPIC_API_KEY`, OpenTelemetry for metrics and tracing, CI that builds and deploys images, and `tenant_id` with row-level security for multi-tenancy.

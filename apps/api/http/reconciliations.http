@@ -1,0 +1,48 @@
+### Dashboard summary (KPIs, match rates, confidence stats)
+GET http://localhost:8000/reconciliations/summary
+
+### Trends: daily reconciliation stats (last 30 days, default)
+GET http://localhost:8000/reconciliations/trends
+
+### Trends: daily reconciliation stats (last 7 days)
+GET http://localhost:8000/reconciliations/trends?days=7
+
+### Trends: daily reconciliation stats (last 90 days)
+GET http://localhost:8000/reconciliations/trends?days=90
+
+### List missing external payments (internal payments with no provider match)
+GET http://localhost:8000/reconciliations/missing-external
+
+### List missing external with pagination
+GET http://localhost:8000/reconciliations/missing-external?limit=10&offset=0
+
+### Get single reconciliation by ID (replace with actual UUID)
+GET http://localhost:8000/reconciliations/627686a6-502a-4aca-9e86-e21c8b106ca0
+
+### List all reconciliations (default: 20 most recent)
+GET http://localhost:8000/reconciliations
+
+### List reconciliations filtered by status - matched
+GET http://localhost:8000/reconciliations?status=matched
+
+### List reconciliations filtered by status - matched_with_fee
+GET http://localhost:8000/reconciliations?status=matched_with_fee
+
+### List reconciliations filtered by status - amount_mismatch
+GET http://localhost:8000/reconciliations?status=amount_mismatch
+
+### List reconciliations filtered by status - missing_internal
+GET http://localhost:8000/reconciliations?status=missing_internal
+
+### List reconciliations filtered by status - missing_external
+GET http://localhost:8000/reconciliations?status=missing_external
+
+### List reconciliations filtered by status - duplicate
+GET http://localhost:8000/reconciliations?status=duplicate
+
+### List reconciliations with pagination (page 2)
+GET http://localhost:8000/reconciliations?limit=10&offset=10
+
+### Run reconciliation engine
+POST http://localhost:8000/reconciliations/run
+Content-Type: application/json
